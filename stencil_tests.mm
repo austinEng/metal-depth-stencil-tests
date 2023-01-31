@@ -5,29 +5,34 @@
 
 #include <Metal/Metal.h>
 
+#define LOG(FORMAT, ...) printf("%s\n", [[NSString stringWithFormat:FORMAT, ##__VA_ARGS__] UTF8String]);
+
 constexpr unsigned int width = 16;
 constexpr unsigned int height = 16;
 unsigned int arrayLayers = 3;
 unsigned int mipmapLevels = 4;
 bool verbose = false;
 
+// reset between iterations.
+bool failed = false;
+
 using TextureData = std::vector<std::vector<std::vector<uint8_t>>>;
 
 #define WRITE_METHODS(X, ...)                                     \
   X(CopyFromBufferToStencil, __VA_ARGS__)                         \
   X(StencilLoadOpStoreOp, __VA_ARGS__)                            \
-  X(StencilLoadOpStoreOpTextureView, __VA_ARGS__)                 \
+  X(StencilLoadOpStoreOpOffsetWithView, __VA_ARGS__)                 \
   X(CopyFromBufferToStencilThenStencilLoadOpStoreOp, __VA_ARGS__) \
   X(StencilLoadOpStoreOpThenCopyFromBufferToStencil, __VA_ARGS__) \
   X(StencilOpStoreOp, __VA_ARGS__)                                \
-  X(StencilOpStoreOpTextureView, __VA_ARGS__)
+  X(StencilOpStoreOpOffsetWithView, __VA_ARGS__)
 
 #define READ_METHODS(X, ...)              \
   X(CopyFromStencilToBuffer, __VA_ARGS__) \
   X(StencilTest, __VA_ARGS__)             \
-  X(StencilTestTextureView, __VA_ARGS__)  \
+  X(StencilTestOffsetWithView, __VA_ARGS__)  \
   X(ShaderRead, __VA_ARGS__)              \
-  X(ShaderReadTextureView, __VA_ARGS__)
+  X(ShaderReadOffsetWithView, __VA_ARGS__)
 
 #define DECL_ENUM(X, ...) X,
 
@@ -120,7 +125,7 @@ void WriteContentsWithLoadOp(
     id<MTLDevice> device,
     id<MTLCommandQueue> commandQueue,
     id<MTLTexture> dsTex,
-    bool offsetWithTextureView,
+    bool offsetWithView,
     TextureData* data) {
   id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
   for (uint32_t level = 0; level < mipmapLevels; ++level) {
@@ -129,7 +134,7 @@ void WriteContentsWithLoadOp(
       rpDesc.stencilAttachment.clearStencil = 1 + ((level * arrayLayers + layer) % 255);
       rpDesc.stencilAttachment.loadAction = MTLLoadActionClear;
       rpDesc.stencilAttachment.storeAction = MTLStoreActionStore;
-      if (offsetWithTextureView) {
+      if (offsetWithView) {
         rpDesc.stencilAttachment.texture =
           [dsTex newTextureViewWithPixelFormat:[dsTex pixelFormat]
                                    textureType:MTLTextureType2D
@@ -156,7 +161,7 @@ void WriteContentsWithStencilOp(
   id<MTLDevice> device,
   id<MTLCommandQueue> commandQueue,
   id<MTLTexture> dsTex,
-  bool offsetWithTextureView,
+  bool offsetWithView,
   TextureData* data
 ) {
   auto* shader = @R"(
@@ -188,7 +193,7 @@ void WriteContentsWithStencilOp(
                                             options:nil
                                               error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
   MTLRenderPipelineDescriptor* pipelineStateDesc = [MTLRenderPipelineDescriptor new];
@@ -199,7 +204,7 @@ void WriteContentsWithStencilOp(
     [device newRenderPipelineStateWithDescriptor:pipelineStateDesc
                                            error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
 
@@ -221,7 +226,7 @@ void WriteContentsWithStencilOp(
       rpDesc.stencilAttachment.clearStencil = 1 + ((level * arrayLayers + layer) % 255);
       rpDesc.stencilAttachment.loadAction = MTLLoadActionClear;
       rpDesc.stencilAttachment.storeAction = MTLStoreActionStore;
-      if (offsetWithTextureView) {
+      if (offsetWithView) {
         rpDesc.stencilAttachment.texture =
           [dsTex newTextureViewWithPixelFormat:[dsTex pixelFormat]
                                    textureType:MTLTextureType2D
@@ -286,8 +291,9 @@ void EncodeCheckR8DataWithCopy(id<MTLDevice> device, id<MTLCommandBuffer> comman
       [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer>) {
         auto* contents = static_cast<uint8_t*>([buffer contents]);
         if (memcmp(contents, data[level][layer].data(), data[level][layer].size()) != 0) {
-          NSLog(@"\tlevel %d, layer %d - FAILED!", level, layer);
+          failed = true;
           if (verbose) {
+            LOG(@"\tlevel %d, layer %d - FAILED!", level, layer);
             printf("\n\tExpected:\n");
             for (unsigned y = 0; y < (height >> level); ++y) {
               printf("\t");
@@ -310,7 +316,7 @@ void EncodeCheckR8DataWithCopy(id<MTLDevice> device, id<MTLCommandBuffer> comman
             printf("\n");
           }
         } else if (verbose) {
-          NSLog(@"\tlevel %d, layer %d - OK", level, layer);
+          LOG(@"\tlevel %d, layer %d - OK", level, layer);
         }
       }];
     }
@@ -329,7 +335,7 @@ void CheckStencilWithShader(
   id<MTLDevice> device,
   id<MTLCommandQueue> commandQueue,
   id<MTLTexture> dsTex,
-  bool offsetWithTextureView,
+  bool offsetWithView,
   const TextureData& data) {
 
   id<MTLTexture> stencilView;
@@ -404,11 +410,11 @@ void CheckStencilWithShader(
 
   NSError* error = nullptr;
   id<MTLLibrary> lib = [
-    device newLibraryWithSource:(offsetWithTextureView ? shader_no_texture_array : shader_with_texture_array)
+    device newLibraryWithSource:(offsetWithView ? shader_no_texture_array : shader_with_texture_array)
                         options:nil
                           error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
   MTLRenderPipelineDescriptor* pipelineStateDesc = [MTLRenderPipelineDescriptor new];
@@ -419,7 +425,7 @@ void CheckStencilWithShader(
     [device newRenderPipelineStateWithDescriptor:pipelineStateDesc
                                            error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
 
@@ -452,7 +458,7 @@ void CheckStencilWithShader(
       [renderEncoder setRenderPipelineState:pipelineState];
       [renderEncoder setFrontFacingWinding:MTLWindingCounterClockwise];
       [renderEncoder setCullMode:MTLCullModeNone];
-      if (offsetWithTextureView) {
+      if (offsetWithView) {
         stencilView = [dsTex newTextureViewWithPixelFormat:viewFormat
                                                textureType:MTLTextureType2D
                                                     levels:NSMakeRange(level, 1)
@@ -481,7 +487,7 @@ void CheckStencilWithStencilTest(
   id<MTLDevice> device,
   id<MTLCommandQueue> commandQueue,
   id<MTLTexture> dsTex,
-  bool offsetWithTextureView,
+  bool offsetWithView,
   const TextureData& data
 ) {
   auto* read_stencil_bit_shader = @R"(
@@ -515,7 +521,7 @@ void CheckStencilWithStencilTest(
                         options:nil
                           error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
   MTLRenderPipelineDescriptor* pipelineStateDesc = [MTLRenderPipelineDescriptor new];
@@ -527,7 +533,7 @@ void CheckStencilWithStencilTest(
     [device newRenderPipelineStateWithDescriptor:pipelineStateDesc
                                            error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
 
@@ -579,7 +585,7 @@ void CheckStencilWithStencilTest(
                         options:nil
                           error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
   pipelineStateDesc = [MTLRenderPipelineDescriptor new];
@@ -590,7 +596,7 @@ void CheckStencilWithStencilTest(
     [device newRenderPipelineStateWithDescriptor:pipelineStateDesc
                                            error:&error];
   if (error != nullptr) {
-    NSLog(@"%@", error);
+    LOG(@"%@", error);
     return;
   }
 
@@ -633,7 +639,7 @@ void CheckStencilWithStencilTest(
 
       rpDesc.stencilAttachment.loadAction = MTLLoadActionLoad;
       rpDesc.stencilAttachment.storeAction = MTLStoreActionStore;
-      if (offsetWithTextureView) {
+      if (offsetWithView) {
         rpDesc.stencilAttachment.texture =
           [dsTex newTextureViewWithPixelFormat:[dsTex pixelFormat]
                                   textureType:MTLTextureType2D
@@ -707,11 +713,11 @@ MTLTextureUsage GetRequiredUsage(WriteMethod wm, ReadMethod rm) {
     case WriteMethod::CopyFromBufferToStencil:
       break;
     case WriteMethod::StencilLoadOpStoreOp:
-    case WriteMethod::StencilLoadOpStoreOpTextureView:
+    case WriteMethod::StencilLoadOpStoreOpOffsetWithView:
     case WriteMethod::CopyFromBufferToStencilThenStencilLoadOpStoreOp:
     case WriteMethod::StencilLoadOpStoreOpThenCopyFromBufferToStencil:
     case WriteMethod::StencilOpStoreOp:
-    case WriteMethod::StencilOpStoreOpTextureView:
+    case WriteMethod::StencilOpStoreOpOffsetWithView:
       usage |= MTLTextureUsageRenderTarget;
       break;
   }
@@ -720,10 +726,10 @@ MTLTextureUsage GetRequiredUsage(WriteMethod wm, ReadMethod rm) {
     case ReadMethod::CopyFromStencilToBuffer:
       break;
     case ReadMethod::ShaderRead:
-    case ReadMethod::ShaderReadTextureView:
+    case ReadMethod::ShaderReadOffsetWithView:
       usage |= MTLTextureUsagePixelFormatView | MTLTextureUsageShaderRead;
       break;
-    case ReadMethod::StencilTestTextureView:
+    case ReadMethod::StencilTestOffsetWithView:
     case ReadMethod::StencilTest:
       usage |= MTLTextureUsageRenderTarget;
       break;
@@ -735,6 +741,7 @@ int main(int argc, char* argv[]) {
 #define HAS_SWITCH(flag) strncmp(argv[i], #flag, sizeof(#flag) - 1) == 0
   const char* writeMethod = nullptr;
   const char* readMethod = nullptr;
+  const char* gpuName = nullptr;
   for (int i = 0; i < argc; ++i) {
     if (HAS_SWITCH(--verbose)) {
       verbose = true;
@@ -767,17 +774,24 @@ int main(int argc, char* argv[]) {
       }
       readMethod = argv[i + 1];
     }
+    if (HAS_SWITCH(--gpu)) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "`gpu` switch should be followed by gpu name. Example: --gpu AMD\n");
+        return 1;
+      }
+      gpuName = argv[i + 1];
+    }
   }
 #undef HAS_SWITCH
 
   for (id<MTLDevice> device : MTLCopyAllDevices()) {
-    if (![[device name] containsString:@"AMD"]) {
+    if (gpuName != nullptr && ![[device name] containsString:[NSString stringWithUTF8String:gpuName]]) {
       continue;
     }
     id<MTLCommandQueue> commandQueue = [device newCommandQueue];
 
-    NSLog(@"==================================================================\n\n");
-    NSLog(@"Testing with %@\n\n", [device name]);
+    LOG(@"==================================================================\n\n");
+    LOG(@"Testing with %@\n\n", [device name]);
 
     for (WriteMethod wm : writeMethods) {
       if (writeMethod != nullptr && strcmp(writeMethod, ToString(wm)) != 0) {
@@ -803,11 +817,18 @@ int main(int argc, char* argv[]) {
             id<MTLTexture> dsTex = [device newTextureWithDescriptor:dsTexDesc];
 
             if (copyT2T) {
-              NSLog(@"Testing %s %s then CopyT2T then %s on %@", ToString(pixelFormat), ToString(wm), ToString(rm), [device name]);
+              LOG(@"%@, %s, %s, CopyT2T-%s",
+                  [device name],
+                  ToString(pixelFormat),
+                  ToString(wm),
+                  ToString(rm));
             } else {
-              NSLog(@"Testing %s %s then %s on %@", ToString(pixelFormat), ToString(wm), ToString(rm), [device name]);
+              LOG(@"%@, %s, %s, %s",
+                  [device name],
+                  ToString(pixelFormat),
+                  ToString(wm),
+                  ToString(rm));
             }
-            NSLog(@"-----------------------------------------------------------------");
 
             TextureData data;
             data.resize(mipmapLevels);
@@ -817,29 +838,31 @@ int main(int argc, char* argv[]) {
                 data[level][layer].resize((width >> level) * (height >> level));
               }
             }
+
+            failed = false;
             switch (wm) {
               case WriteMethod::CopyFromBufferToStencil:
                 WriteStencilWithCopy(device, commandQueue, dsTex, &data);
                 break;
               case WriteMethod::StencilLoadOpStoreOp:
-                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithTextureView */ false, &data);
+                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithView */ false, &data);
                 break;
-              case WriteMethod::StencilLoadOpStoreOpTextureView:
-                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithTextureView */ true, &data);
+              case WriteMethod::StencilLoadOpStoreOpOffsetWithView:
+                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithView */ true, &data);
                 break;
               case WriteMethod::CopyFromBufferToStencilThenStencilLoadOpStoreOp:
                 WriteStencilWithCopy(device, commandQueue, dsTex, &data);
-                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithTextureView */ false, &data);
+                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithView */ false, &data);
                 break;
               case WriteMethod::StencilLoadOpStoreOpThenCopyFromBufferToStencil:
-                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithTextureView */ false, &data);
+                WriteContentsWithLoadOp(device, commandQueue, dsTex, /* offsetWithView */ false, &data);
                 WriteStencilWithCopy(device, commandQueue, dsTex, &data);
                 break;
               case WriteMethod::StencilOpStoreOp:
-                WriteContentsWithStencilOp(device, commandQueue, dsTex, /* offsetWithTextureView */ false, &data);
+                WriteContentsWithStencilOp(device, commandQueue, dsTex, /* offsetWithView */ false, &data);
                 break;
-              case WriteMethod::StencilOpStoreOpTextureView:
-                WriteContentsWithStencilOp(device, commandQueue, dsTex, /* offsetWithTextureView */ true, &data);
+              case WriteMethod::StencilOpStoreOpOffsetWithView:
+                WriteContentsWithStencilOp(device, commandQueue, dsTex, /* offsetWithView */ true, &data);
                 break;
             }
 
@@ -873,17 +896,23 @@ int main(int argc, char* argv[]) {
                 CheckStencilWithCopy(device, commandQueue, dsTex, data);
                 break;
               case ReadMethod::ShaderRead:
-                CheckStencilWithShader(device, commandQueue, dsTex, /* offsetWithTextureView */ false, data);
+                CheckStencilWithShader(device, commandQueue, dsTex, /* offsetWithView */ false, data);
                 break;
-              case ReadMethod::ShaderReadTextureView:
-                CheckStencilWithShader(device, commandQueue, dsTex, /* offsetWithTextureView */ true, data);
+              case ReadMethod::ShaderReadOffsetWithView:
+                CheckStencilWithShader(device, commandQueue, dsTex, /* offsetWithView */ true, data);
                 break;
               case ReadMethod::StencilTest:
-                CheckStencilWithStencilTest(device, commandQueue, dsTex, /* offsetWithTextureView */ false, data);
+                CheckStencilWithStencilTest(device, commandQueue, dsTex, /* offsetWithView */ false, data);
                 break;
-              case ReadMethod::StencilTestTextureView:
-                CheckStencilWithStencilTest(device, commandQueue, dsTex, /* offsetWithTextureView */ true, data);
+              case ReadMethod::StencilTestOffsetWithView:
+                CheckStencilWithStencilTest(device, commandQueue, dsTex, /* offsetWithView */ true, data);
                 break;
+            }
+
+            if (failed) {
+              LOG(@"\tFAILED");
+            } else {
+              LOG(@"\tOK");
             }
           }
         }
