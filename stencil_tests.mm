@@ -86,7 +86,8 @@ void WriteStencilWithCopy(
   id<MTLTexture> dsTex,
   TextureData* data
 ) {
-  uint8_t stencilValue = 0;
+  // Randomize initial value to mitigate reading results from a previous test iteration.
+  uint8_t stencilValue = rand() % 255;
 
   id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
   id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
@@ -127,11 +128,14 @@ void WriteContentsWithLoadOp(
     id<MTLTexture> dsTex,
     bool offsetWithView,
     TextureData* data) {
+  // Randomize initial value to mitigate reading results from a previous test iteration.
+  uint8_t stencilStartValue = rand() % 255;
+
   id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
   for (uint32_t level = 0; level < mipmapLevels; ++level) {
     for (uint32_t layer = 0; layer < arrayLayers; ++layer) {
       MTLRenderPassDescriptor* rpDesc =  [MTLRenderPassDescriptor renderPassDescriptor];
-      rpDesc.stencilAttachment.clearStencil = 1 + ((level * arrayLayers + layer) % 255);
+      rpDesc.stencilAttachment.clearStencil = 1 + ((level * arrayLayers + layer + stencilStartValue) % 255);
       rpDesc.stencilAttachment.loadAction = MTLLoadActionClear;
       rpDesc.stencilAttachment.storeAction = MTLStoreActionStore;
       if (offsetWithView) {
@@ -219,11 +223,14 @@ void WriteContentsWithStencilOp(
 
   id<MTLDepthStencilState> dsState = [device newDepthStencilStateWithDescriptor:dsDesc];
 
+  // Randomize initial value to mitigate reading results from a previous test iteration.
+  uint8_t stencilStartValue = rand() % 255;
+
   id<MTLCommandBuffer> commandBuffer = [commandQueue commandBuffer];
   for (uint32_t level = 0; level < mipmapLevels; ++level) {
     for (uint32_t layer = 0; layer < arrayLayers; ++layer) {
       MTLRenderPassDescriptor* rpDesc =  [MTLRenderPassDescriptor renderPassDescriptor];
-      rpDesc.stencilAttachment.clearStencil = 1 + ((level * arrayLayers + layer) % 255);
+      rpDesc.stencilAttachment.clearStencil = 1 + ((level * arrayLayers + layer + stencilStartValue) % 255);
       rpDesc.stencilAttachment.loadAction = MTLLoadActionClear;
       rpDesc.stencilAttachment.storeAction = MTLStoreActionStore;
       if (offsetWithView) {
@@ -737,12 +744,31 @@ MTLTextureUsage GetRequiredUsage(WriteMethod wm, ReadMethod rm) {
   return usage;
 }
 
+void printUsage() {
+  printf(R"(USAGE: stencil_tests [options]
+
+OPTIONS:
+  --verbose		Print information about failed subresources and contents
+  --levels <value>		Override the number of mip levels. (default: 4)
+  --layers <value>		Override the number of array levels. (default: 3)
+  --write <name>		Filter to only test one write method
+  --read <name>		Filter to only test one read method
+  --format <name>		Filter to only test one pixel format
+  --gpu <name>		Filter to only test one GPU. Matches if the provided name is contained in the MTLDevice name.
+)");
+}
+
 int main(int argc, char* argv[]) {
 #define HAS_SWITCH(flag) strncmp(argv[i], #flag, sizeof(#flag) - 1) == 0
   const char* writeMethod = nullptr;
   const char* readMethod = nullptr;
   const char* gpuName = nullptr;
+  const char* formatName = nullptr;
   for (int i = 0; i < argc; ++i) {
+    if (HAS_SWITCH(--help)) {
+      printUsage();
+      return 1;
+    }
     if (HAS_SWITCH(--verbose)) {
       verbose = true;
     }
@@ -774,6 +800,13 @@ int main(int argc, char* argv[]) {
       }
       readMethod = argv[i + 1];
     }
+    if (HAS_SWITCH(--format)) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "`format` switch should be followed by format name. Example: --format Depth32FloatStencil8\n");
+        return 1;
+      }
+      formatName = argv[i + 1];
+    }
     if (HAS_SWITCH(--gpu)) {
       if (i + 1 >= argc) {
         fprintf(stderr, "`gpu` switch should be followed by gpu name. Example: --gpu AMD\n");
@@ -802,7 +835,13 @@ int main(int argc, char* argv[]) {
           continue;
         }
         for (bool copyT2T : {false, true}) {
-          for (MTLPixelFormat pixelFormat : {MTLPixelFormatDepth32Float_Stencil8, MTLPixelFormatStencil8}) {
+          for (MTLPixelFormat pixelFormat : {
+              MTLPixelFormatDepth32Float_Stencil8,
+              MTLPixelFormatStencil8,
+          }) {
+            if (formatName != nullptr && strcmp(formatName, ToString(pixelFormat)) != 0) {
+              continue;
+            }
             MTLTextureDescriptor* dsTexDesc = [MTLTextureDescriptor new];
             dsTexDesc.textureType = MTLTextureType2DArray;
             dsTexDesc.pixelFormat = pixelFormat;
