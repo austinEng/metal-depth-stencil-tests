@@ -375,7 +375,7 @@ void CheckStencilWithShader(
         constant uint& array_index [[buffer(1)]],
         metal::texture2d_array<uint, metal::access::sample> stencil_texture [[texture(0)]]
     ) {
-      return stencil_texture.read(uint2(in.position.xy), lod, array_index).x;
+      return stencil_texture.read(uint2(in.position.xy), array_index, lod).x;
     }
   )";
 
