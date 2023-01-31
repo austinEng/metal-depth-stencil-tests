@@ -1,5 +1,3 @@
-// mkdir -p bin && clang++ stencil_tests.mm -mmacosx-version-min=10.12 -std=c++17 -framework Metal -fobjc-arc -o bin/stencil_tests && MTL_DEBUG_LAYER=1 ./bin/stencil_tests 2>&1 > output.log
-
 #include <array>
 #include <tuple>
 #include <vector>
