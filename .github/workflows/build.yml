@@ -6,10 +6,3 @@ jobs:
    - uses: actions/checkout@main
    - name: Build
      run: ./build.sh
-   - name: Upload
-     uses: skx/github-action-publish-binaries@release-2.0
-     env:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-     with:
-       releaseId: ${{ needs.create_release.outputs.id }}
-       args: './bin/*'
