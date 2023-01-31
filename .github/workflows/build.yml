@@ -5,9 +5,7 @@ jobs:
   steps:
    - uses: actions/checkout@main
    - name: Compile
-     uses: skx/github-action-build@master
-     with:
-      builder: build.sh
+     run: build.sh
    - name: Upload
      uses: skx/github-action-publish-binaries@release-2.0
      env:
