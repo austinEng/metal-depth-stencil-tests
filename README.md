@@ -1,7 +1,7 @@
 # Metal Depth Stencil Tests
 Various Metal drivers have issues with depth stencil textures, particularly when they have a non-zero number of mip levels and/or array layers.
 
-Some results from local testing are summarized in this [spreadsheet](https://docs.google.com/spreadsheets/d/1G2LuDNlZU1cAuxafvAYHf_HSlQHBYWQXeeBMqfDkvm0/edit).
+Some results from local testing are summarized in this [spreadsheet](https://docs.google.com/spreadsheets/d/1G2LuDNlZU1cAuxafvAYHf_HSlQHBYWQXeeBMqfDkvm0/edit?usp=sharing&resourcekey=0-NNvOW6xRqGKayqroZynYdA).
 
 The tests write and read back from a depth stencil texture using various methods. The tests also have a parameterization that performs an intermediate texture-to-texture copy before the readback.
 
@@ -40,7 +40,7 @@ Visual inspection shows that oftene, the 0th subresource is always selected.
 This format seems to be entirely broken on this platform.
 
 ## Many operations only work with the 0th mip level and 0th array layer
-These are indicated by yellow boxes in the [spreadsheet](https://docs.google.com/spreadsheets/d/1G2LuDNlZU1cAuxafvAYHf_HSlQHBYWQXeeBMqfDkvm0/edit).
+These are indicated by yellow boxes in the [spreadsheet](https://docs.google.com/spreadsheets/d/1G2LuDNlZU1cAuxafvAYHf_HSlQHBYWQXeeBMqfDkvm0/edit?usp=sharing&resourcekey=0-NNvOW6xRqGKayqroZynYdA).
  - Reading data with the depth test on Mac AMD.
  - Sampling stencil from Depth32FloatStencil8 on Mac AMD (Stencil8 works).
  - Sampling stencil on Mac Intel
