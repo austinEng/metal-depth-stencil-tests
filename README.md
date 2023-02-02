@@ -3,80 +3,52 @@ Various Metal drivers have issues with depth stencil textures, particularly when
 
 Some results from local testing are summarized in this [spreadsheet](https://docs.google.com/spreadsheets/d/1G2LuDNlZU1cAuxafvAYHf_HSlQHBYWQXeeBMqfDkvm0/edit).
 
-Notably, all the tests pass on Apple M1 Max, or when they are run using only 1 mip level and 1 array layer (args: `--levels 1 --layers 1`).
-
-The tests write and read back from a depth stencil texture using various methods.
-
-Write methods:
- - CopyFromBufferToStencil
- - StencilLoadOpStoreOp
- - StencilLoadOpStoreOpOffsetWithView
- - CopyFromBufferToStencilThenStencilLoadOpStoreOp
- - StencilLoadOpStoreOpThenCopyFromBufferToStencil
- - StencilOpStoreOp
- - StencilOpStoreOpOffsetWithView
-
-Read methods:
- - CopyFromStencilToBuffer
- - StencilTest
- - StencilTestOffsetWithView
- - ShaderRead
- - ShaderReadOffsetWithView
- - CopyT2T-* (same as all the read methods, with an intermediate texture copy)
+The tests write and read back from a depth stencil texture using various methods. The tests also have a parameterization that performs an intermediate texture-to-texture copy before the readback.
 
 ## How to run
-Build with `./build.sh`. Then run `./bin/stencil_tests`. Pass `--help` to see options.
+Build with `./build.sh`. Then run `./bin/depth_stencil_tests`. Pass `--help` to see options.
 
-## Failures on 2017 15-Inch Macbook Pro, MacOS 13.1
+# Issues
+Below is my attempt to parse out what some of the problems are. It is incomplete as there are a plethora of failures.
 
-### Reading a X32_Stencil8 non-zero subresource texture view of Depth32FloatStencil8 on AMD in the shader
- - Texture is created as TextureType2DArray with MTLPixelFormatDepth32FloatStencil8
- - It is viewed as Texture2D MTLPixelFormatX32_Stencil8 by selecting a single layer and mip level using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
- - The results are wrong. Visual inspection shows the read is only reading data from the 0th array layer.
- - Works for Stencil8
- - Works of the mip is selecting using the `lod` arg in the shader.
- - Broken both either if the view is at a non-zero mip offset or non-zero slice offset.
+## Failures on 2021 15-Inch Macbook Pro, MacOS 13.1 (M1 Max)
+Tests which read back data using the depth test for Depth16Unorm fail. Interestingly, they pass when the tested mip level is non-zero. They only fail when level=0.
 
-### Reading a Stencil8 texture view of Stencil8 on Intel at a subresource offset
- - Texture is created as TextureType2DArray with MTLPixelFormatStencil8
- - It is viewed as Texture2D Stencil8 by selecting a single mip and layer using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
- - Works if the layer and level are selected using the `array_index` and `lod`.
- - The results are wrong. Visual inspection shows the read is always reading back zeros.
+## Validation Layers Inconsistency
+MacOS 10.13 throws errors if you try to attach just a depth or stencil attachment when the format is a combined depth-stencil format:
+```
+[MTLRenderPipelineDescriptorInternal validateWithDevice:]:2408: failed `depthAttachmentPixelFormat (MTLPixelFormatInvalid) and (MTLPixelFormatDepth32Float_Stencil8) must match.'
+```
+Newer OSes don't require this, but additional tests will fail if you don't specify both attachments.
+All the tests I ran set both attachments, for consistency.
 
-### Reading a multi-subresource Depth32FloatStencil8/Stencil8 texture on Intel using the stencil test
- - Texture is created as TextureType2DArray with either MTLPixelFormatDepth32FloatStencil8 or MTLPixelFormatStencil8
- - It is attached as a stencil attachment
-  - either using `.level` and `.slice` of [`MTLRenderPassAttachmentDescriptor`](https://developer.apple.com/documentation/metal/mtlrenderpassattachmentdescriptor?language=objc)
-  - or creating a Texture2D view by selecting a single mip and layer using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
- - The results are wrong. Visual inspection shows the read is only reading data from the 0th layer and level.
+## Reading / Writing Using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
 
-### Reading a multi-mip Depth32FloatStencil8/Stencil8 texture view on AMD using the stencil test
- - Texture is created as TextureType2DArray with either MTLPixelFormatDepth32FloatStencil8 or MTLPixelFormatStencil8
- - It is attached as a stencil attachment as a Texture2D view by selecting a single mip using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
- - The results are wrong. Visual inspection shows the read is only reading data from the 0th mip level.
+Fails on various platforms:
+ - MacOS 13.1, 12.1 AMD, both Stencil8 and Depth32FloatStencil8:
+   - write: StencilLoadOpStoreOpOffsetWithView
+   - write: StencilOpStoreOpOffsetWithView
+ - MacOS 13.1, 12.5, 12.1, 11.4, 10.13 Intel, all depth formats:
+   - write: DepthLoadOpStoreOpOffsetWithView
+ - MacOS 13.1, 12.5 with stencil8
+   - read: ShaderReadStencilOffsetWithView
+   - read: CopyT2T-ShaderReadStencilOffsetWithView
 
-### Writing a multi-mip Depth32FloatStencil8/Stencil8 texture view attachment on AMD
- - Texture is created as TextureType2DArray with either MTLPixelFormatDepth32FloatStencil8 or MTLPixelFormatStencil8
- - It is attached as a stencil attachment as a Texture2D view by selecting a single mip using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
- - Write to the texture using the StoreOp.
- - The results are wrong. Visual inspection shows the data is a repeating pattern:
-      ```
-      00 00 00 00 00 00 00 00
-      ff 3b ff 3b ff 3b ff 3b
-      00 00 00 00 00 00 00 00
-      ff 3b ff 3b ff 3b ff 3b
-      00 00 00 00 00 00 00 00
-      ff 3b ff 3b ff 3b ff 3b
-      00 00 00 00 00 00 00 00
-      ff 3b ff 3b ff 3b ff 3b
-      ```
+Visual inspection shows that oftene, the 0th subresource is always selected.
 
-### Reading a X32_Stencil8 non-zero subresource of multi-mip Depth32FloatStencil8 on Intel in the shader
- - Texture is created as TextureType2DArray with MTLPixelFormatDepth32FloatStencil8
- - A single mip is selected:
-  - either passing the `lod` argument explicily in the shader
-  - or creating a Texture2D MTLPixelFormatX32_Stencil8 view and selecting a single mip using [newTextureViewWithPixelFormat:textureType:levels:slices:](https://developer.apple.com/documentation/metal/mtltexture/1515409-newtextureviewwithpixelformat)
- - The results are wrong. Sometimes it's wrong values, sometimes it's always 0.
- - Works for Stencil8.
- - With 1 array layer, works at mips 0, 1, 2. Fails at 3+.
- - With 3 array layers and 4 mips, it fails except for level=0, layer=0.
+## All tests fail with Stencil8 on Mac AMD 12.1 (1002:6821)
+This format seems to be entirely broken on this platform.
+
+## Many operations only work with the 0th mip level and 0th array layer
+These are indicated by yellow boxes in the [spreadsheet](https://docs.google.com/spreadsheets/d/1G2LuDNlZU1cAuxafvAYHf_HSlQHBYWQXeeBMqfDkvm0/edit).
+ - Reading data with the depth test on Mac AMD.
+ - Sampling stencil from Depth32FloatStencil8 on Mac AMD (Stencil8 works).
+ - Sampling stencil on Mac Intel
+ - Nearly all opertions with stencil on Intel with MacOS 10.13.
+
+## Texture-to-texture copies of depth sometimes work, sometimes do not
+This occurs on Mac Intel.
+ - In MacOS 13.1, writing depth with DepthLoadOpStoreOp and reading with the DepthTest works.
+   Performing and intermediate texture-to-texture copy makes it work only with the 0th mip level and array layer.
+ - Conversely in MacOS 12.1, writing depth with DepthLoadOpStoreOp and reading it in the shader does not work for any subresources.
+   Performing an intermediate texture-to-texture copy makes it work for all subresources.
